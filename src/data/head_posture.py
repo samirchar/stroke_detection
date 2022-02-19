@@ -1,0 +1,156 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+
+from videosource import WebcamSource
+
+from custom.face_geometry import (  # isort:skip
+    PCF,
+    get_metric_landmarks,
+    procrustes_landmark_basis,
+)
+
+mp_drawing = mp.solutions.drawing_utils
+mp_face_mesh = mp.solutions.face_mesh
+drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=3)
+
+points_idx = [33, 263, 61, 291, 199]
+points_idx = points_idx + [key for (key, val) in procrustes_landmark_basis]
+points_idx = list(set(points_idx))
+points_idx.sort()
+
+# uncomment next line to use all points for PnP algorithm
+# points_idx = list(range(0,468)); points_idx[0:2] = points_idx[0:2:-1];
+
+frame_height, frame_width, channels = (720, 1280, 3)
+
+# pseudo camera internals
+focal_length = frame_width
+center = (frame_width / 2, frame_height / 2)
+camera_matrix = np.array(
+    [[focal_length, 0, center[0]], [0, focal_length, center[1]], [0, 0, 1]],
+    dtype="double",
+)
+
+dist_coeff = np.zeros((4, 1))
+
+
+def main():
+    source = WebcamSource()
+
+    pcf = PCF(
+        near=1,
+        far=10000,
+        frame_height=frame_height,
+        frame_width=frame_width,
+        fy=camera_matrix[1, 1],
+    )
+
+    with mp_face_mesh.FaceMesh(
+        static_image_mode=False,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    ) as face_mesh:
+
+        for idx, (frame, frame_rgb) in enumerate(source):
+            results = face_mesh.process(frame_rgb)
+            multi_face_landmarks = results.multi_face_landmarks
+
+            if multi_face_landmarks:
+                face_landmarks = multi_face_landmarks[0]
+                landmarks = np.array(
+                    [(lm.x, lm.y, lm.z) for lm in face_landmarks.landmark]
+                )
+                # print(landmarks.shape)
+                landmarks = landmarks.T
+
+                metric_landmarks, pose_transform_mat = get_metric_landmarks(
+                    landmarks.copy(), pcf
+                )
+
+                image_points = (
+                    landmarks[0:2, points_idx].T
+                    * np.array([frame_width, frame_height])[None, :]
+                )
+                model_points = metric_landmarks[0:3, points_idx].T
+
+                # see here:
+                # https://github.com/google/mediapipe/issues/1379#issuecomment-752534379
+                pose_transform_mat[1:3, :] = -pose_transform_mat[1:3, :]
+                mp_rotation_vector, _ = cv2.Rodrigues(pose_transform_mat[:3, :3])
+                mp_translation_vector = pose_transform_mat[:3, 3, None]
+
+
+                # Get rotational matrix
+                rmat, jac = cv2.Rodrigues(mp_rotation_vector)
+  
+                #from math import pi,atan2,asin
+                #R = cv2.Rodrigues(mp_rotation_vector)[0]
+                #x = 180*atan2(-R[2][1], R[2][2])/pi
+                #y = 180*asin(R[2][0])/pi
+                #z = 180*atan2(-R[1][0], R[0][0])/pi
+
+                # Get angles
+                angles, mtxR, mtxQ, Qx, Qy, Qz = cv2.RQDecomp3x3(rmat)
+
+                # Get the y rotation degree
+                x = angles[0] #* 360
+                y = angles[1] #* 360
+                z = angles[2] #* 360
+          
+
+                if False:
+                    # sanity check
+                    # get same result with solvePnP
+
+                    success, rotation_vector, translation_vector = cv2.solvePnP(
+                        model_points,
+                        image_points,
+                        camera_matrix,
+                        dist_coeff,
+                        flags=cv2.cv2.SOLVEPNP_ITERATIVE,
+                    )
+
+                    np.testing.assert_almost_equal(mp_rotation_vector, rotation_vector)
+                    np.testing.assert_almost_equal(
+                        mp_translation_vector, translation_vector
+                    )
+    
+                for face_landmarks in multi_face_landmarks:
+                    
+                    mp_drawing.draw_landmarks(
+                        image=frame,
+                        landmark_list=face_landmarks,
+                        connections=mp_face_mesh.FACEMESH_CONTOURS,
+                        landmark_drawing_spec=drawing_spec,
+                        connection_drawing_spec=drawing_spec,
+                    )
+
+                nose_tip = model_points[0]
+                nose_tip_extended = 2.5 * model_points[0]
+                (nose_pointer2D, jacobian) = cv2.projectPoints(
+                    np.array([nose_tip, nose_tip_extended]),
+                    mp_rotation_vector,
+                    mp_translation_vector,
+                    camera_matrix,
+                    dist_coeff,
+                )
+
+                
+                nose_tip_2D, nose_tip_2D_extended = nose_pointer2D.squeeze().astype(int)
+                frame = cv2.line(
+                    frame, nose_tip_2D, nose_tip_2D_extended, (255, 0, 0), 2
+                )
+            import imutils
+            frame = imutils.rotate(frame, angle=z)
+            #cv2.putText(image, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2)
+            cv2.putText(frame, "x: " + str(np.round(x,2)), (500, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(frame, "y: " + str(np.round(y,2)), (500, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(frame, "z: " + str(np.round(z,2)), (500, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            
+            source.show(frame)
+
+
+if __name__ == "__main__":
+    main()

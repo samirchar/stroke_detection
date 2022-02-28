@@ -129,9 +129,14 @@ class ROIExtractor:
         and continue clockwise
         """
 
+        h,w,_ = self.frame.shape
+
         min_x, max_x = min(point1[0], point2[0]), max(point1[0], point2[0])
         min_y, max_y = min(point1[1], point2[1]), max(point1[1], point2[1])
-        roi_bounds = (min_x, max_x, min_y, max_y)
+        roi_bounds = tuple(round(i) for i in (min_x, max_x, min_y, max_y))
+
+        roi_bounds = int(np.clip(min_x,0,w)),int(np.clip(max_x,0,w)),int(np.clip(min_y,0,h)),int(np.clip(max_y,0,h))
+
 
         if project_to != []:
 
@@ -150,7 +155,8 @@ class ROIExtractor:
             roi = cv2.resize(roi, (dh, dw))
 
         else:
-            roi = self.frame[min_y:max_y, min_x:max_x, :]
+            roi = self.frame[roi_bounds[2]:roi_bounds[3],roi_bounds[0]:roi_bounds[1], :]
+            
 
         if self.debug:
             plt.imshow(roi)
@@ -159,29 +165,56 @@ class ROIExtractor:
         return roi, roi_bounds
 
     def left_mouth(self, **kwargs):
-        tr = self.processed_landmarks["nose"][33]
+
+        tr = self.processed_landmarks["nose"][4]
         bl = np.array(
             (
-                self.processed_landmarks["head"][2][0],
-                self.processed_landmarks["head"][8][1],
+                self.processed_landmarks["head"][93][0],
+                #list(self.processed_landmarks['mid_chin'].values())[0][1]
+                self.processed_landmarks["head"][152][1]
             )
         )
         return self.get_region_of_interest(tr, bl, **kwargs)
 
     def right_mouth(self, **kwargs):
-        p1 = self.processed_landmarks["nose"][33]
-        p2 = np.array(
+        tl = self.processed_landmarks["nose"][4]
+        br = np.array(
             (
-                self.processed_landmarks["head"][14][0],
-                self.processed_landmarks["head"][8][1],
+                self.processed_landmarks["head"][323][0],
+                #list(self.processed_landmarks['mid_chin'].values())[0][1]
+                self.processed_landmarks["head"][152][1]
             )
         )
 
-        return self.get_region_of_interest(p1, p2, **kwargs)
+        return self.get_region_of_interest(tl, br, **kwargs)
 
+
+    def left_face(self, **kwargs):
+
+        tr = self.processed_landmarks["head"][10]
+        bl = np.array(
+            (
+                self.processed_landmarks["head"][93][0],
+                #list(self.processed_landmarks['mid_chin'].values())[0][1]
+                self.processed_landmarks["head"][152][1]
+            )
+        )
+        return self.get_region_of_interest(tr, bl, **kwargs)
+
+    def right_face(self, **kwargs):
+        tl = self.processed_landmarks["head"][10]
+        br = np.array(
+            (
+                self.processed_landmarks["head"][323][0],
+                #list(self.processed_landmarks['mid_chin'].values())[0][1]
+                self.processed_landmarks["head"][152][1]
+            )
+        )
+
+        return self.get_region_of_interest(tl, br, **kwargs)
 
 class BarycentricOperations:
-    def __init__(self, landmarks_left_to_right_mapping, triangle_indices, constant=100):
+    def __init__(self, landmarks_left_to_right_mapping, triangle_indices=[70,300,4], constant=100):
 
         self.landmarks_left_to_right_mapping = dict(landmarks_left_to_right_mapping)
         self.triangle_indices = (
@@ -190,18 +223,25 @@ class BarycentricOperations:
 
         self.constant = constant
 
-    def order_landmarks(self, landmarks):
-        ordered_idxs = list(self.landmarks_left_to_right_mapping.keys()) + list(
-            self.landmarks_left_to_right_mapping.values()
-        )
+    def order_landmarks(self, processed_landmarks):
+        left=[]
+        right=[]
+        
+        flattened_landmark_dict = {
+            k: v for i in processed_landmarks.values() for k, v in i.items()
+        }
 
-        # Place triangle indices to the end
-        for i in set(ordered_idxs) & set(self.triangle_indices):
-            ordered_idxs.pop(ordered_idxs.index(i))
+        for l,r in self.landmarks_left_to_right_mapping.items():
 
-        ordered_idxs += self.triangle_indices
+            if (l not in self.triangle_indices) & (r not in self.triangle_indices):
 
-        return landmarks[ordered_idxs, :]
+                left.append(flattened_landmark_dict[l])
+                right.append(flattened_landmark_dict[r])
+
+        triangle_coords = np.array([flattened_landmark_dict[i] for i in self.triangle_indices])
+        ordered_landmarks = np.vstack([left,right,triangle_coords])
+
+        return ordered_landmarks
 
     def cartesian_to_barycentric(self, coordinates):
 
@@ -262,7 +302,6 @@ class BarycentricOperations:
         asymmetry_by_landmark = true_flipped_landmarks - theoretical_flipped_landmarks
         return (asymmetry_by_landmark ** 2).sum()
 
-
 class OpticalFlow:
     def __init__(self, flow_threshold=6):
         self.flow_threshold = flow_threshold
@@ -270,10 +309,10 @@ class OpticalFlow:
 
     def compute_dense_flow(self, prev_frame, frame):
 
-        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_RGB2GRAY)
         # Converts each frame to grayscale - we previously
         # only converted the first frame to grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
         # Calculates dense optical flow by Farneback method
         flow = cv2.calcOpticalFlowFarneback(

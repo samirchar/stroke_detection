@@ -44,6 +44,40 @@ LEFT_EYEBROW_IDXS = extract_roi_indexes('FACEMESH_RIGHT_EYEBROW')
 HEAD_IDXS = extract_roi_indexes('FACEMESH_FACE_OVAL')
 MOUTH_IDXS = extract_roi_indexes('FACEMESH_LIPS')
 
+ADDITIONAL_MOUTH_IDXS = [38,
+                        41,
+                        42,
+                        72,
+                        73,
+                        74,
+                        77,
+                        85,
+                        86,
+                        89,
+                        90,
+                        96,
+                        179,
+                        180,
+                        183,
+                        184,
+                        268,
+                        271,
+                        272,
+                        302,
+                        303,
+                        304,
+                        307,
+                        315,
+                        316,
+                        319,
+                        320,
+                        325,
+                        403,
+                        404,
+                        408,
+                        407]
+NOSE_IDXS = [4]
+
 LEFT_UPPER_EAR_IDXS = [127]
 RIGHT_UPPER_EAR_IDXS = [356]
 
@@ -51,9 +85,10 @@ BOTTOM_CHIN_IDXS = [152]
 MID_CHIN_IDXS = [200]
 
 KEY_LANDMARKS = {
-    "mouth": {"idxs": MOUTH_IDXS},
-    "nose": {"idxs": []},
+    "mouth": {"idxs": MOUTH_IDXS+ADDITIONAL_MOUTH_IDXS},
+    "nose": {"idxs": NOSE_IDXS},
     "head": {"idxs": HEAD_IDXS},
+    "mid_chin": {"idxs": MID_CHIN_IDXS},
     "left_eye": {"idxs": LEFT_EYE_IDXS},
     "left_eyebrow": {"idxs": LEFT_EYEBROW_IDXS},
     "right_eye": {"idxs": RIGHT_EYE_IDXS},
@@ -173,10 +208,11 @@ class FaceAligner:
         self,
         landmarks,
         head_pose = [None,None,None],
-        desiredLeftEye=(0.32, 0.32),
+        desiredLeftEye=(0.35, 0.35),
         desiredFaceWidthHeight = DESIRED_FACE_WIDTH_HEIGHT,
-        left_eye_idxs = LEFT_EYE_IDXS,
-        right_eye_idxs = RIGHT_EYE_IDXS
+        left_eye_idxs = LEFT_EYE_IDXS,#[133],#[127,162,67,140,103,109],
+        right_eye_idxs = RIGHT_EYE_IDXS,#[362],#[356,389,297,378,338,332],
+        yaw_correction = True
     ):
         # store the facial landmarks, desired output left
         # eye position, and desired output face width + height
@@ -188,7 +224,8 @@ class FaceAligner:
         self.head_pose = head_pose #as x,y,z = pitch, yaw, roll
         self.pitch, self.yaw, self.roll = self.head_pose
         self.desiredFaceWidth, self.desiredFaceHeight = desiredFaceWidthHeight
-
+        self.yaw_correction = yaw_correction
+        
     def align(self, image):
         # convert the landmark (x, y)-coordinates to a NumPy array
         # compute the center of mass for each eye
@@ -196,15 +233,15 @@ class FaceAligner:
         leftEyePts = self.landmarks[self.left_eye_idxs,:]
         rightEyePts = self.landmarks[self.right_eye_idxs,:]
         
-        leftEyeCenter = leftEyePts.mean(axis=0).astype("int")
-        rightEyeCenter = rightEyePts.mean(axis=0).astype("int")
+        leftEyeCenter = leftEyePts.mean(axis=0).round().astype("int")
+        rightEyeCenter = rightEyePts.mean(axis=0).round().astype("int")
 
         # compute the angle between the eye centroids
         dY = rightEyeCenter[1] - leftEyeCenter[1]
         dX = rightEyeCenter[0] - leftEyeCenter[0]
         
         if self.roll is None:
-            self.roll = np.degrees(np.arctan2(dY, dX)) - 180
+            self.roll = np.degrees(np.arctan2(dY, dX)) - 180#TODO: Not working
 
         # compute the desired right eye x-coordinate based on the
         # desired x-coordinate of the left eye
@@ -215,13 +252,15 @@ class FaceAligner:
         # image to the ratio of distance between eyes in the
         # *desired* image
         dist = np.sqrt((dX ** 2) + (dY ** 2))
-        dist = abs(dist/np.cos(np.radians(self.yaw)))#Yaw correction
+
+        if self.yaw_correction:
+            dist = abs(dist/np.cos(np.radians(self.yaw)))#Yaw correction
         
         desiredDist = desiredRightEyeX - self.desiredLeftEye[0]
         desiredDist *= self.desiredFaceWidth
 
         scale = desiredDist / dist
-
+        
         # compute center (x, y)-coordinates (i.e., the median point)
         # between the two eyes in the input image
         eyesCenter = (
@@ -233,6 +272,8 @@ class FaceAligner:
         M = cv2.getRotationMatrix2D(
             (int(eyesCenter[0]), int(eyesCenter[1])), -self.roll, scale
         )
+
+        #print((int(eyesCenter[0]), int(eyesCenter[1])), -self.roll, scale)
 
         # update the translation component of the matrix
         tX = self.desiredFaceWidth * 0.5
@@ -272,8 +313,12 @@ class FaceMeshDetector():
                  frame_width=FRRAME_WIDTH,
                  desiredFaceWidthHeight = DESIRED_FACE_WIDTH_HEIGHT,
                  channels=CHANNELS,
-                 points_idx = POINTS_IDX):
+                 points_idx = POINTS_IDX,
+                 yaw_correction=True,
+                 roll_as_eyes_angle = False):
      
+        self.yaw_correction = yaw_correction
+        self.roll_as_eyes_angle = roll_as_eyes_angle
         self.desiredFaceWidthHeight = desiredFaceWidthHeight
         self.refine_landmarks = refine_landmarks
         self.frame_height = frame_height
@@ -319,6 +364,7 @@ class FaceMeshDetector():
         )
 
         landmarks_2D = landmarks[0:2,:].T*np.array([self.frame_width, self.frame_height])
+        landmarks_3D = landmarks.T
 
         image_points = landmarks_2D[self.points_idx,:][None, :]#The 2D points necessary for pose estimation
         model_points = metric_landmarks[0:3, self.points_idx].T#The 3D model points necessary for pose estimation
@@ -340,7 +386,7 @@ class FaceMeshDetector():
         y = angles[1] 
         z = -angles[2]
         
-        return landmarks_2D, x, y, z
+        return landmarks_2D, landmarks_3D, x, y, z
     
     def crop_and_align(self,img,landmarks,rotation_point,angle):
         rotation_point = landmarks[1]
@@ -359,19 +405,25 @@ class FaceMeshDetector():
             for faceLms in self.results.multi_face_landmarks:
 
                 face = {}
-                landmarks_2D, x, y, z = self.get_2Dlandmarks_and_pose(faceLms.landmark[:468])
+                landmarks_2D,landmarks_3D, x, y, z = self.get_2Dlandmarks_and_pose(faceLms.landmark[:468])
                 
                 #img, landmarks_2D = self.crop_and_align(img,landmarks_2D,landmarks_2D[1],-z)
                 
-                if self.maxFaces==1:
+                if (self.maxFaces==1):
                     fa = FaceAligner(landmarks_2D,
-                                    head_pose = [x, y, z],
-                                    desiredFaceWidthHeight= self.desiredFaceWidthHeight)
+                                    head_pose = [x,
+                                                 y,
+                                                 None if self.roll_as_eyes_angle else z],
+                                                 
+                                    desiredFaceWidthHeight= self.desiredFaceWidthHeight,
+                                    yaw_correction=self.yaw_correction)
 
                     self.imgRGB, landmarks_2D=fa.align(self.imgRGB)
                     
                 face['landmarks'] = landmarks_2D
+                face['landmarks_3D'] = landmarks_3D
                 face['pose'] = [x,y,z]
+                face['detection'] = faceLms
                 faces.append(face)
   
             #Align Roll.
@@ -418,16 +470,18 @@ class FaceMeshDetector():
 
         return img, faces
 
-    def run_live_v2(self):
+    def run_live_v2(self,save_faces_objs = False,draw_face_mesh=False):
         cap = cv2.VideoCapture(0)
         #ret, frame = cap.read()
         pTime = 0
-
+        self.live_faces_objs = []
         while True:
             success, frame = cap.read()
 
             frame, faces = self.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),selected_landmarks=-1)
-            frame = self.draw_faces(frame,faces)
+            frame = self.draw_faces(frame,faces,draw_face_mesh=draw_face_mesh)
+            if save_faces_objs:
+                self.live_faces_objs.append(faces)
 
             #if len(faces)!= 0:
             #    print(faces[0])

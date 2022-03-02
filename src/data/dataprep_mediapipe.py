@@ -8,7 +8,7 @@ from imutils.face_utils import shape_to_np
 import numpy as np
 from .imgutils import is_tensor_and_convert, rgb_to_bgr, img_2_gray_scale
 import time
-
+import math as m
 import mediapipe as mp
 from src.data.videosource import WebcamSource
 from src.data.custom.face_geometry import (  # isort:skip
@@ -109,6 +109,90 @@ DESIRED_FACE_WIDTH_HEIGHT = (128,128)
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh = mp.solutions.face_mesh
 drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=3)
+
+
+#3D rotation matrices  
+def Rx(theta):
+    theta = np.radians(theta)
+    return np.array([[ 1, 0           , 0           ],
+                   [ 0, m.cos(theta),-m.sin(theta)],
+                   [ 0, m.sin(theta), m.cos(theta)]])
+  
+def Ry(theta):
+    theta = np.radians(theta)
+    return np.array([[ m.cos(theta), 0, m.sin(theta)],
+                   [ 0           , 1, 0           ],
+                   [-m.sin(theta), 0, m.cos(theta)]])
+  
+def Rz(theta):
+    theta = np.radians(theta)
+    return np.array([[ m.cos(theta), -m.sin(theta), 0 ],
+                   [ m.sin(theta), m.cos(theta) , 0 ],
+                   [ 0           , 0            , 1 ]])
+
+def landmark_2d_normalization(landmarks_3D,
+                              pose,
+                              transform = True,
+                              normalize = True,
+                              center = True,
+                              draw = False):
+
+    SIZE = 100
+    
+    points=landmarks_3D.copy()
+    
+    #Pose corrrection matrix
+    R= Rx(pose[0])@Ry(-pose[1])@Rz(pose[2])
+
+    #Correct pose
+    if transform:
+        t_points = (R@points.T).T
+    else:
+        t_points = points
+    
+    #Get only de 2d landmarks
+    t_points_2d = t_points[:,:2]
+    
+    #Normalize between 0 and 1
+    if normalize:
+        #t_points_2d = (t_points_2d-t_points_2d.min())/(t_points_2d.max()-t_points_2d.min())
+        
+        leftEyePts = t_points_2d[LEFT_EYE_IDXS,:]
+        rightEyePts = t_points_2d[RIGHT_EYE_IDXS,:]
+        
+        leftEyeCenter = leftEyePts.mean(axis=0)
+        rightEyeCenter = rightEyePts.mean(axis=0)
+
+        # compute the angle between the eye centroids
+        dY = rightEyeCenter[1] - leftEyeCenter[1]
+        dX = rightEyeCenter[0] - leftEyeCenter[0]
+        
+        dist = np.sqrt((dX ** 2) + (dY ** 2))
+        
+        desiredDist = 0.2
+
+        scale = desiredDist / dist
+        
+        t_points_2d = t_points_2d*scale
+
+    t_points_2d = t_points_2d*np.array([SIZE,SIZE])
+    
+    if center:
+        nose = t_points_2d[4]
+        t_points_2d=t_points_2d-nose+np.array([SIZE//2,SIZE//2]) 
+        
+    if draw:
+        img = np.zeros((SIZE,SIZE,3),dtype=np.uint8)
+        img.fill(255)
+
+        for (x, y) in t_points_2d:
+            cv2.circle(img,
+                       (int(round(x)),int(round(y))),
+                       SIZE//256,
+                       (0, 0, 255),
+                       -1)
+        cv2.imshow("Image",img)
+    return t_points_2d
 
 def filter_landmark_by_index(selected_landmarks, key_landmarks):
     filtered_landmarks = defaultdict(lambda: {"idxs": None})
@@ -421,6 +505,7 @@ class FaceMeshDetector():
                     self.imgRGB, landmarks_2D=fa.align(self.imgRGB)
                     
                 face['landmarks'] = landmarks_2D
+                face['landmarks_normalized'] = landmark_2d_normalization(landmarks_3D,[x,y,z])
                 face['landmarks_3D'] = landmarks_3D
                 face['pose'] = [x,y,z]
                 face['detection'] = faceLms
@@ -467,6 +552,7 @@ class FaceMeshDetector():
         
         for i in range(len(faces)):
             faces[i]["processed_landmarks"] = process_landmarks(faces[i]['landmarks'], selected_landmarks)
+            faces[i]["processed_landmarks_normalized"] = process_landmarks(faces[i]['landmarks_normalized'], selected_landmarks)
 
         return img, faces
 

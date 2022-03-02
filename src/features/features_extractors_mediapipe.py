@@ -1,9 +1,11 @@
 import torch
 import cv2
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 from skimage import transform
+from collections import defaultdict
 
 torch.manual_seed(0)
 
@@ -302,6 +304,82 @@ class BarycentricOperations:
         asymmetry_by_landmark = true_flipped_landmarks - theoretical_flipped_landmarks
         return (asymmetry_by_landmark ** 2).sum()
 
+
+class BarycentricAsymmetryCalculator:
+    def __init__(self):
+
+        self.regions_left_to_right_mapping = {'mouth':{  37:267,
+                                                        72:302,
+                                                        38:268,
+                                                        82:312,
+                                                        87:317,
+                                                        86:316,
+                                                        85:315,
+                                                        84:314,
+                                                        39:269,
+                                                        73:303,
+                                                        41:271,
+                                                        81:311,
+                                                        178:402,
+                                                        179:403,
+                                                        180:404,
+                                                        181:405,
+                                                        40:270,
+                                                        74:304,
+                                                        42:272,
+                                                        80:310,
+                                                        88:318,
+                                                        89:319,
+                                                        90:320,
+                                                        91:321,
+                                                        185:409,
+                                                        184:408,
+                                                        183:407,
+                                                        191:415,
+                                                        95:324,
+                                                        96:325,
+                                                        77:307,
+                                                        146:375},
+                                              
+                                              'eyebrows':{  107:336,
+                                                            66:296,
+                                                            105:334,
+                                                            63:293,
+                                                            70:300,
+                                                            46:276,
+                                                            53:283,
+                                                            52:282,
+                                                            65:295,
+                                                            55:285
+                                                            }
+                                                     }
+    
+    def region_asymmetry(self,landmarks,region):
+        
+        assert region in self.regions_left_to_right_mapping.keys(), "region not implemented"
+        
+        bo = BarycentricOperations(self.regions_left_to_right_mapping[region])
+        return bo.global_asymmetry_index(landmarks)
+        
+    def get_indexes(self,landmarks,regions = ['mouth','eyebrows']):
+        indexes = {r:self.region_asymmetry(landmarks,r) for r in regions}
+        return indexes
+    
+    def get_indexes_video(self,landmarks_sequence,regions = ['mouth','eyebrows']):
+        
+        dd = defaultdict(list)
+
+        for l in landmarks_sequence:
+            indexes = self.get_indexes(l,regions)
+            for key, value in indexes.items():
+                dd[key].append(value)
+                
+        dd = pd.DataFrame(dd)
+        return dd
+    
+    def get_indexes_stats_video(self,asymmetry_index_df):
+        return asymmetry_index_df.quantile([.1,.2,.3,.4,.5,.6])       
+ 
 class OpticalFlow:
     def __init__(self, flow_threshold=6):
         self.flow_threshold = flow_threshold

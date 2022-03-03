@@ -10,6 +10,15 @@ from collections import defaultdict
 torch.manual_seed(0)
 
 
+
+def merge_dicts(dict_list):
+    dd = defaultdict(list)
+
+    for d in dict_list: # you can list as many input dicts as you want here
+        for key, value in d.items():
+            dd[key].append(value)
+    return dd 
+
 def h_point_to_line_intersection(point, line):
     p1, p2 = line
     x1, y1 = p1
@@ -435,6 +444,68 @@ class OpticalFlow:
 
         return rgb
 
+
+
+class ROIFlowExtractorV2:
+    
+    def __init__(self,flow_threshold):
+        self.op_face = OpticalFlow(flow_threshold = flow_threshold)
+        self.face_mag = None
+        self.face_angle = None
+        self.regions_movement = {'mouth':{'left':[],
+                                          'right':[]
+                                         }
+                                }
+        
+    def face_flow(self,frame_prev,frame,filter = True):
+        self.face_mag,self.face_angle = self.op_face.compute_dense_flow(frame_prev,frame)
+        if filter:
+            self.face_mag = self.op_face.filter_flow_magnitude_noise(self.face_mag)
+            
+    def movement_score(self, magnitudes: list):
+        magnitudes = np.array(magnitudes)
+        return magnitudes.mean()
+    
+    def region_movement(self,processed_landmarks,region):
+        '''
+        processed_landmarks = current frame processed landmarks, not previous.
+        
+        Only using magnitud and ignoring angle.
+        '''
+        
+        assert self.face_mag is not None, "Extract face flow first with face_flow"
+            
+        re = ROIExtractor(self.face_mag[:,:,None],processed_landmarks,debug=False)
+        
+        if region == 'mouth':
+            mouth_left_of,_ = re.left_mouth()
+            mouth_right_of,_ = re.right_mouth()
+            
+            mouth_left_movement = self.movement_score([mouth_left_of])
+            mouth_right_movement = self.movement_score([mouth_right_of])
+            return mouth_left_movement,mouth_right_movement
+        
+        else:
+            raise ValueError('Region not implemented')
+    
+    def all_regions_movement(self,processed_landmarks,regions):
+        
+        for region in regions:
+            region_left,rergion_right =\
+                self.region_movement(processed_landmarks,region)
+            
+            self.regions_movement[region]['left'].append(region_left)
+            self.regions_movement[region]['right'].append(rergion_right)
+
+    def to_df(self):
+        df = []
+        for r in self.regions_movement.keys():
+            r_df=pd.DataFrame(self.regions_movement[r])
+            r_df.columns = [f'{r}_'+i for i in r_df.columns]
+            df.append(r_df)
+        df = pd.concat(df,axis=1)
+        
+        return df
 
 class OpticalFlowSymmetry:
     def __init__(self):

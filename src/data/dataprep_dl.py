@@ -598,24 +598,8 @@ class FaceMeshDetector():
                     self.imgRGB, landmarks_2D=fa.align(self.imgRGB)
                     
                 face['landmarks'] = landmarks_2D
-                face['landmarks_normalized_v2'] = landmark_2d_normalization_v2(metric_landmarks,
-                                                                            mp_translation_vector,
-                                                                            self.camera_matrix)
-
-                face['landmarks_normalized_v1'] = landmark_2d_normalization_v1(landmarks_3D,
-                                                                                self.frame_height,
-                                                                                self.frame_width,
-                                                                                [x,y,z])
-                face['landmarks_3D'] = landmarks_3D
                 face['pose'] = [x,y,z]
-                face['detection'] = faceLms
                 faces.append(face)
-  
-            #Align Roll.
-            
-            #cv2.putText(img, "x: " + str(np.round(x,2)), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            #cv2.putText(img, "y: " + str(np.round(y,2)), (10, 100), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 255), 1)
-            #cv2.putText(img, "z: " + str(np.round(z,2)), (10, 150), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 255), 1)
 
         return self.imgRGB, faces
     
@@ -645,15 +629,10 @@ class FaceMeshDetector():
                 
         return img
 
-    def process(self,img,selected_landmarks=-1):
+    def process(self,img):
     
         img = is_tensor_and_convert(img)
         img, faces = self.findFaceMesh(img)
-        
-        for i in range(len(faces)):
-            faces[i]["processed_landmarks"] = process_landmarks(faces[i]['landmarks'], selected_landmarks)
-            faces[i]["processed_landmarks_normalized_v2"] = process_landmarks(faces[i]['landmarks_normalized_v2'], selected_landmarks)
-            faces[i]["processed_landmarks_normalized_v1"] = process_landmarks(faces[i]['landmarks_normalized_v1'], selected_landmarks)
 
         return img, faces
 
@@ -665,7 +644,7 @@ class FaceMeshDetector():
         while True:
             success, frame = cap.read()
 
-            frame, faces = self.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),selected_landmarks=-1)
+            frame, faces = self.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             frame = self.draw_faces(frame,faces,draw_face_mesh=draw_face_mesh)
             if save_faces_objs:
                 self.live_faces_objs.append(faces)

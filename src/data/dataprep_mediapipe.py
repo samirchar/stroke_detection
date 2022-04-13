@@ -1,21 +1,28 @@
 import torch
 import cv2
-import dlib
+import os
+from glob import glob
 from collections import defaultdict
 import imutils
+import torchvision
 from imutils import face_utils
 from imutils.face_utils import shape_to_np
 import numpy as np
-from .imgutils import is_tensor_and_convert, rgb_to_bgr, img_2_gray_scale
+from data.imgutils import is_tensor_and_convert, rgb_to_bgr, img_2_gray_scale
 import time
 import math as m
 import mediapipe as mp
-from src.data.videosource import WebcamSource
-from src.data.custom.face_geometry import (  # isort:skip
+import multiprocessing
+from functools import partial
+from data.videosource import WebcamSource
+from data.custom.face_geometry import (  # isort:skip
     PCF,
     get_metric_landmarks,
     procrustes_landmark_basis,
 )
+
+from utils.abstract_classes import DataProcessor
+from utils.data_handler import save_to_pickle,read_pickle
 
 # from openface import openface
 
@@ -75,7 +82,16 @@ ADDITIONAL_MOUTH_IDXS = [38,
                         403,
                         404,
                         408,
-                        407]
+                        407,
+                        #61,
+                        #291,
+                        #76,
+                        #306,
+                        #62,
+                        #292,
+                        #78,
+                        #308
+                        ]
 NOSE_IDXS = [4]
 
 LEFT_UPPER_EAR_IDXS = [127]
@@ -130,14 +146,14 @@ def Rz(theta):
                    [ m.sin(theta), m.cos(theta) , 0 ],
                    [ 0           , 0            , 1 ]])
 
-def landmark_2d_normalization(landmarks_3D,
-                              pose,
-                              transform = True,
-                              normalize = True,
-                              center = True,
-                              draw = False):
-
-    SIZE = 100
+def landmark_2d_normalization_v1(landmarks_3D,
+                                 frame_height,
+                                 frame_width,
+                                 pose,
+                                 transform = True,
+                                 normalize = True,
+                                 center = True,
+                                 draw = False):
     
     points=landmarks_3D.copy()
     
@@ -152,11 +168,10 @@ def landmark_2d_normalization(landmarks_3D,
     
     #Get only de 2d landmarks
     t_points_2d = t_points[:,:2]
-    
-    #Normalize between 0 and 1
-    if normalize:
-        #t_points_2d = (t_points_2d-t_points_2d.min())/(t_points_2d.max()-t_points_2d.min())
-        
+    t_points_2d = t_points_2d*np.array([frame_width,frame_height])
+
+    #Normalize
+    if normalize:        
         leftEyePts = t_points_2d[LEFT_EYE_IDXS,:]
         rightEyePts = t_points_2d[RIGHT_EYE_IDXS,:]
         
@@ -169,33 +184,105 @@ def landmark_2d_normalization(landmarks_3D,
         
         dist = np.sqrt((dX ** 2) + (dY ** 2))
         
-        desiredDist = 0.2
+        desiredDist = 10
 
         scale = desiredDist / dist
         
         t_points_2d = t_points_2d*scale
-
-    t_points_2d = t_points_2d*np.array([SIZE,SIZE])
     
+    center_loc = np.array([100,100])
+
     if center:
         nose = t_points_2d[4]
-        t_points_2d=t_points_2d-nose+np.array([SIZE//2,SIZE//2]) 
+        t_points_2d=t_points_2d-nose+center_loc
         
     if draw:
-        img = np.zeros((SIZE,SIZE,3),dtype=np.uint8)
+        size = t_points_2d.max().round().astype(int)+50
+        img = np.zeros((*[size]*2,3),dtype=np.uint8)
         img.fill(255)
 
         for (x, y) in t_points_2d:
             cv2.circle(img,
                        (int(round(x)),int(round(y))),
-                       SIZE//256,
+                       size//256,
                        (0, 0, 255),
                        -1)
         cv2.imshow("Image",img)
     return t_points_2d
 
+
+def landmark_2d_normalization_v2(metric_landmarks,
+                              mp_translation_vector,
+                              camera_matrix,
+                              normalize = True,
+                              center = True,
+                              draw = False):
+    
+    dist_coeff = np.zeros((4, 1))
+
+    t_points_2d,_=cv2.projectPoints(
+                                    metric_landmarks.T,
+                                    np.array([[np.pi],[0],[0]]),
+                                    mp_translation_vector,
+                                    camera_matrix,
+                                    dist_coeff,
+                                )
+
+    t_points_2d = t_points_2d.squeeze()
+
+    #Normalize between 0 and 1
+
+    #Normalize
+    if normalize:        
+        leftEyePts = t_points_2d[LEFT_EYE_IDXS,:]
+        rightEyePts = t_points_2d[RIGHT_EYE_IDXS,:]
+        
+        leftEyeCenter = leftEyePts.mean(axis=0)
+        rightEyeCenter = rightEyePts.mean(axis=0)
+
+        # compute the angle between the eye centroids
+        dY = rightEyeCenter[1] - leftEyeCenter[1]
+        dX = rightEyeCenter[0] - leftEyeCenter[0]
+        
+        dist = np.sqrt((dX ** 2) + (dY ** 2))
+        
+        desiredDist = 10
+
+        scale = desiredDist / dist
+        
+        t_points_2d = t_points_2d*scale
+    
+
+    center_loc = np.array([100,100])
+
+    if center:
+        nose = t_points_2d[4]
+        t_points_2d=t_points_2d-nose+center_loc
+
+    if draw:
+        size = t_points_2d.max().round().astype(int)+50
+        img = np.zeros((*[size]*2,3),dtype=np.uint8)
+        img.fill(255)
+
+        for (x, y) in t_points_2d:
+            cv2.circle(img,
+                       (int(round(x)),int(round(y))),
+                       size//256,
+                       (0, 0, 255),
+                       -1)
+        cv2.imshow("Image",img)
+    return t_points_2d
+
+
+def group_landmark_template():
+    return {"idxs": None, "values": None}
+
+def group_landmark_template_idxs():
+    return {"idxs": None}
+
 def filter_landmark_by_index(selected_landmarks, key_landmarks):
-    filtered_landmarks = defaultdict(lambda: {"idxs": None})
+    
+    filtered_landmarks = defaultdict(group_landmark_template_idxs)
 
     for k, v in key_landmarks.items():
 
@@ -235,7 +322,7 @@ def process_landmarks(landmarks,selected_landmarks=-1, key_landmarks = KEY_LANDM
     else:
         raise TypeError("selected_landmarks can be either -1 or a list")
 
-    processed_landmarks = defaultdict(lambda: {"idxs": None, "values": None})
+    processed_landmarks = defaultdict(group_landmark_template)
 
     for k, v in filtered_landmarks.items():
         processed_landmarks[k] = dict(zip(v["idxs"], landmarks[v["idxs"]]))
@@ -470,7 +557,7 @@ class FaceMeshDetector():
         y = angles[1] 
         z = -angles[2]
         
-        return landmarks_2D, landmarks_3D, x, y, z
+        return landmarks_2D, landmarks_3D, x, y, z, metric_landmarks,mp_translation_vector
     
     def crop_and_align(self,img,landmarks,rotation_point,angle):
         rotation_point = landmarks[1]
@@ -489,7 +576,13 @@ class FaceMeshDetector():
             for faceLms in self.results.multi_face_landmarks:
 
                 face = {}
-                landmarks_2D,landmarks_3D, x, y, z = self.get_2Dlandmarks_and_pose(faceLms.landmark[:468])
+                (landmarks_2D,
+                landmarks_3D, 
+                x,
+                y,
+                z,
+                metric_landmarks,
+                mp_translation_vector)= self.get_2Dlandmarks_and_pose(faceLms.landmark[:468])
                 
                 #img, landmarks_2D = self.crop_and_align(img,landmarks_2D,landmarks_2D[1],-z)
                 
@@ -505,7 +598,14 @@ class FaceMeshDetector():
                     self.imgRGB, landmarks_2D=fa.align(self.imgRGB)
                     
                 face['landmarks'] = landmarks_2D
-                face['landmarks_normalized'] = landmark_2d_normalization(landmarks_3D,[x,y,z])
+                face['landmarks_normalized_v2'] = landmark_2d_normalization_v2(metric_landmarks,
+                                                                            mp_translation_vector,
+                                                                            self.camera_matrix)
+
+                face['landmarks_normalized_v1'] = landmark_2d_normalization_v1(landmarks_3D,
+                                                                                self.frame_height,
+                                                                                self.frame_width,
+                                                                                [x,y,z])
                 face['landmarks_3D'] = landmarks_3D
                 face['pose'] = [x,y,z]
                 face['detection'] = faceLms
@@ -552,7 +652,8 @@ class FaceMeshDetector():
         
         for i in range(len(faces)):
             faces[i]["processed_landmarks"] = process_landmarks(faces[i]['landmarks'], selected_landmarks)
-            faces[i]["processed_landmarks_normalized"] = process_landmarks(faces[i]['landmarks_normalized'], selected_landmarks)
+            faces[i]["processed_landmarks_normalized_v2"] = process_landmarks(faces[i]['landmarks_normalized_v2'], selected_landmarks)
+            faces[i]["processed_landmarks_normalized_v1"] = process_landmarks(faces[i]['landmarks_normalized_v1'], selected_landmarks)
 
         return img, faces
 
@@ -569,8 +670,6 @@ class FaceMeshDetector():
             if save_faces_objs:
                 self.live_faces_objs.append(faces)
 
-            #if len(faces)!= 0:
-            #    print(faces[0])
             cTime = time.time()
             fps = 1 / (cTime - pTime)
             pTime = cTime
@@ -603,3 +702,81 @@ class FaceMeshDetector():
             if c == 27:
                 break
 
+class VideoProcessor(DataProcessor):
+    """Base processor to be used for all preparation."""
+    def __init__(self, input_directory, output_directory):
+        self.input_directory = input_directory
+        self.output_directory = output_directory
+        self.videos = {}
+
+    def video_filter(self,directory,patient_id='*',video_type='*',extension='MOV',return_basenames = True):
+        full_paths = glob(os.path.join(directory,
+                                f'{patient_id}_{video_type}.{extension}'))
+        
+        if not return_basenames:
+            return full_paths
+        
+        base_names = [os.path.basename(x) for x in full_paths]
+        return base_names
+
+    def read(self,video_names,transpose = True):
+        """Read raw data."""
+        for v_name in video_names:
+            video_obj = cv2.VideoCapture(os.path.join(self.input_directory ,v_name))
+
+
+            temp = []
+            while True:
+                ret, frame = video_obj.read()
+                if ret == False:
+                    break
+                temp.append(cv2.cvtColor(frame,cv2.COLOR_BGR2RGB))
+            self.videos[v_name] = np.array(temp)
+
+    def pre_process_single_video(self,video_name,img_size = 256,**kwargs):
+        ''''Helper to process one video'''
+        #print(video_name)
+        video = self.videos[video_name]
+        #print(video)
+        num_frames,h,w,c = video.shape
+        detector = FaceMeshDetector(frame_height=h,
+                                        frame_width=w,
+                                        desiredFaceWidthHeight= (img_size,img_size),
+                                        **kwargs)
+
+        processed_frames = []
+        for raw_frame in video:
+            frame,faces = detector.process(raw_frame)
+            if faces != []:
+                face = faces[0] #assuming there will only be one face
+                processed_frames.append(
+                                        {'frame':frame,
+                                            'face_data':face}
+                                            )
+            else:
+                processed_frames.append(
+                        {'frame':None,
+                            'face_data':None}
+                            )
+
+
+        pickle_name = video_name.split('.')[0]+'.pkl'
+        save_to_pickle(processed_frames,os.path.join(self.output_directory ,pickle_name))
+        #return processed_frames
+
+    def pre_process(self,img_size = 256, **kwargs):
+        """Pre processes all videos"""
+        for video_name in self.videos.keys():
+            self.pre_process_single_video(video_name,img_size=img_size,**kwargs)
+
+    def clean(self):
+        """Cleaning data"""
+        pass
+
+    def feature_engineer(self):
+        """Class to perform feature engineering i.e. create new features"""
+        pass
+                 
+    def save(self):
+        """Saves processed data."""
+        pass

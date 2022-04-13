@@ -1,3 +1,4 @@
+import os
 import torch
 import cv2
 import numpy as np
@@ -62,8 +63,8 @@ def nose_mouth_features(processed_landmarks):
     # TODO: Normalize distances by face max x distance and max y distance
 
     # Get landmarks
-    x1, y1 = processed_landmarks["nose"][30]
-    lm, rm = (processed_landmarks["mouth"][48], processed_landmarks["mouth"][54])
+    x1, y1 = processed_landmarks["nose"][4]
+    lm, rm = (processed_landmarks["mouth"][61], processed_landmarks["mouth"][291])
 
     x2, y2 = lm
     x3, y3 = rm
@@ -317,14 +318,15 @@ class BarycentricOperations:
 class BarycentricAsymmetryCalculator:
     def __init__(self):
 
-        self.regions_left_to_right_mapping = {'mouth':{  37:267,
-                                                        72:302,
-                                                        38:268,
-                                                        82:312,
-                                                        87:317,
-                                                        86:316,
-                                                        85:315,
-                                                        84:314,
+        self.regions_left_to_right_mapping = {'mouth':{  
+                                                        #37:267,
+                                                        #72:302,
+                                                        #38:268,
+                                                        #82:312,
+                                                        #87:317,
+                                                        #86:316,
+                                                        #85:315,
+                                                        #84:314,
                                                         39:269,
                                                         73:303,
                                                         41:271,
@@ -348,8 +350,13 @@ class BarycentricAsymmetryCalculator:
                                                         95:324,
                                                         96:325,
                                                         77:307,
-                                                        146:375},
-                                              
+                                                        146:375,
+                                                        #61:291,
+                                                        #76:306,
+                                                        #62:292,
+                                                        #78:308
+                                                        },
+                                        
                                               'eyebrows':{  107:336,
                                                             66:296,
                                                             105:334,
@@ -403,7 +410,8 @@ class OpticalFlow:
 
         # Calculates dense optical flow by Farneback method
         flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
+            prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, cv2.OPTFLOW_FARNEBACK_GAUSSIAN
+            
         )
 
         # Computes the magnitude and angle of the 2D vectors
@@ -443,8 +451,6 @@ class OpticalFlow:
         self.mask = None
 
         return rgb
-
-
 
 class ROIFlowExtractorV2:
     

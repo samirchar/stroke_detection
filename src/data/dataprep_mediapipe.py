@@ -761,7 +761,11 @@ class VideoProcessor(DataProcessor):
 
 
         pickle_name = video_name.split('.')[0]+'.pkl'
+
+        start_time = time.time()
         save_to_pickle(processed_frames,os.path.join(self.output_directory ,pickle_name))
+        end_time = time.time()
+        print('saving time',end_time-start_time)
         #return processed_frames
 
     def pre_process(self,img_size = 256, **kwargs):

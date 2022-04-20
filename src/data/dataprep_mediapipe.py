@@ -571,8 +571,10 @@ class FaceMeshDetector():
     def findFaceMesh(self, img):
         self.imgRGB = img.copy()
         self.results = self.faceMesh.process(self.imgRGB)
+        
         faces = []
         if self.results.multi_face_landmarks:
+
             for faceLms in self.results.multi_face_landmarks:
 
                 face = {}
@@ -611,11 +613,8 @@ class FaceMeshDetector():
                 face['detection'] = faceLms
                 faces.append(face)
   
-            #Align Roll.
-            
-            #cv2.putText(img, "x: " + str(np.round(x,2)), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            #cv2.putText(img, "y: " + str(np.round(y,2)), (10, 100), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 255), 1)
-            #cv2.putText(img, "z: " + str(np.round(z,2)), (10, 150), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 255), 1)
+        else:
+            self.imgRGB = None
 
         return self.imgRGB, faces
     
@@ -702,7 +701,7 @@ class FaceMeshDetector():
             if c == 27:
                 break
 
-class VideoProcessor(DataProcessor):
+class VideoProcessorWithLandmarks(DataProcessor):
     """Base processor to be used for all preparation."""
     def __init__(self, input_directory, output_directory):
         self.input_directory = input_directory
@@ -784,3 +783,97 @@ class VideoProcessor(DataProcessor):
     def save(self):
         """Saves processed data."""
         pass
+
+
+class VideoProcessor(DataProcessor):
+    """Base processor to be used for all preparation."""
+    def __init__(self,
+                 input_directory,
+                 output_directory):
+        
+        self.input_directory = input_directory
+        self.output_directory = output_directory
+        self.extracted_frames_dir = os.path.join(self.input_directory,'frames')
+        self.processed_frames_path = os.path.join(self.output_directory,'frames')
+        
+        self.videos = {}
+
+    def video_filter(self,directory,patient_id='*',video_type='*',extension='MOV',return_basenames = True):
+        full_paths = glob(os.path.join(directory,
+                                f'{patient_id}_{video_type}.{extension}'))
+        
+        if not return_basenames:
+            return full_paths
+        
+        base_names = [os.path.basename(x) for x in full_paths]
+        return base_names
+
+
+    def extract_frames(self,filenames):
+        for filename in filenames:
+            if not os.path.exists(self.extracted_frames_dir):
+                os.mkdir(self.extracted_frames_dir)
+            if not os.path.exists(os.path.join(self.extracted_frames_dir , str(os.path.splitext(filename)[0]))):
+                os.mkdir(os.path.join(self.extracted_frames_dir , str(os.path.splitext(filename)[0])))
+                
+            command = f"ffmpeg -r 1 -i {self.input_directory}/"  + str(filename) + f" -r 1 '{os.path.join(self.extracted_frames_dir,str(os.path.splitext(filename)[0]),'%04d.png')}'"
+            os.system(command=command)
+            
+
+    def pre_process(self,img_size = 256,**kwargs):
+            
+        #create frames folder
+
+        if not os.path.exists(self.processed_frames_path):
+            os.mkdir(self.processed_frames_path)
+        
+        #Read all video names
+        video_names = glob(os.path.join(self.extracted_frames_dir,'*'))
+        
+        for v in video_names:
+            processed_video_path = os.path.join(self.processed_frames_path,v.split('/')[-1])
+            
+            #Create processed video folder
+            if not os.path.exists(processed_video_path):
+                os.mkdir(processed_video_path)
+            
+            video_frames = glob(os.path.join(v,'*'))
+            
+            for idx,raw_frame_path in enumerate(video_frames):
+                
+                png_name = raw_frame_path.split('/')[-1]
+
+                #read raw image
+                raw_frame = self.read(raw_frame_path)
+                
+                if idx==0: #Initialize only once per video
+                    h,w,c = raw_frame.shape
+
+                    detector = FaceMeshDetector(frame_height=h,
+                                                frame_width=w,
+                                                desiredFaceWidthHeight= (img_size,img_size),
+                                                **kwargs)
+                    
+                frame,_ = detector.process(raw_frame)
+
+                #Save processed image
+                if frame is not None: #Some frames de detector can't find any face
+                    self.save(frame,processed_video_path,png_name)
+
+    def read(self,raw_frame_path):
+        return cv2.cvtColor(cv2.imread(raw_frame_path),
+                        cv2.COLOR_BGR2RGB)
+  
+    def save(self,frame,processed_video_path,png_name):
+        """Saves processed data."""
+        cv2.imwrite(os.path.join(processed_video_path,png_name),
+                    cv2.cvtColor(frame,cv2.COLOR_RGB2BGR))
+
+    def clean(self):
+        """Cleaning data"""
+        pass
+
+    def feature_engineer(self):
+        """Class to perform feature engineering i.e. create new features"""
+        pass
+               
